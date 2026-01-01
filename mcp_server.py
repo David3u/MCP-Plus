@@ -25,9 +25,9 @@ os.makedirs(todos_dir, exist_ok=True)
 todo_manager = TodoManager(todos_dir=todos_dir)
 
 @mcp.tool()
-def context_engine(question: str, path: str = ".", use_refiner: bool = True) -> str:
+def context_engine(question: str, path: str = ".") -> str:
     """
-    The best tool for getting comprehensive codebase context.
+    The **best** tool for getting comprehensive codebase context.
 
     **Core Principles:**
     - Ask focused questions for best results
@@ -35,6 +35,7 @@ def context_engine(question: str, path: str = ".", use_refiner: bool = True) -> 
     - Trust the analysis 
     
     **When to Use:**
+    - When starting out with a new codebase
     - Understanding how features work across multiple files
     - Finding where specific functionality is implemented
     - Architectural questions spanning multiple modules
@@ -46,11 +47,11 @@ def context_engine(question: str, path: str = ".", use_refiner: bool = True) -> 
         context_engine(question="Explain the API endpoint structure")
     
     Args:
-        question: Your question about the codebase in natural language
+        question: The information you want to know in natural language
         path: Path to the codebase (defaults to current directory)
     
     Returns:
-        Comprehensive markdown-formatted analysis with code snippets (automatically injected with line numbers)
+        Comprehensive markdown-formatted analysis with relevant code snippets
     """
     agent = ContextEngine()
     abs_path = os.path.abspath(path)
@@ -59,7 +60,7 @@ def context_engine(question: str, path: str = ".", use_refiner: bool = True) -> 
         return f"Error: Path {abs_path} does not exist."
     
     try:
-        result = agent.get_codebase_context(question, abs_path, use_refiner=False)
+        result = agent.get_codebase_context(question, abs_path)
         return result
     except Exception as e:
         import traceback
