@@ -1,0 +1,6 @@
+mcp[cli]
+openai
+python-dotenv
+pydantic
+rich
+pathspec
