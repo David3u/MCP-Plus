@@ -1,4 +1,5 @@
 import os
+import re
 import pathspec
 import logging
 from typing import List, Dict, Any
@@ -95,6 +96,96 @@ class ContextEngine:
             result.append(line)
         
         return '\n'.join(result)
+
+    def get_file_extension(self, file_path: str) -> str:
+        """Get the file extension for syntax highlighting."""
+        ext_map = {
+            '.py': 'python',
+            '.js': 'javascript',
+            '.ts': 'typescript',
+            '.tsx': 'tsx',
+            '.jsx': 'jsx',
+            '.json': 'json',
+            '.md': 'markdown',
+            '.html': 'html',
+            '.css': 'css',
+            '.scss': 'scss',
+            '.yaml': 'yaml',
+            '.yml': 'yaml',
+            '.sh': 'bash',
+            '.sql': 'sql',
+            '.go': 'go',
+            '.rs': 'rust',
+            '.java': 'java',
+            '.rb': 'ruby',
+            '.php': 'php',
+            '.c': 'c',
+            '.cpp': 'cpp',
+            '.h': 'c',
+        }
+        _, ext = os.path.splitext(file_path)
+        return ext_map.get(ext.lower(), '')
+
+    def extract_lines(self, root_dir: str, file_path: str, start_line: int, end_line: int) -> str:
+        """Extract specific lines from a file with line numbers."""
+        try:
+            full_path = os.path.join(root_dir, file_path)
+            if not os.path.exists(full_path):
+                return f"[Error: File not found: {file_path}]"
+            
+            with open(full_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            total_lines = len(lines)
+            
+            # Clamp line numbers to valid range
+            start_line = max(1, start_line)
+            end_line = min(total_lines, end_line)
+            
+            if start_line > total_lines:
+                return f"[Error: Start line {start_line} exceeds file length ({total_lines} lines)]"
+            
+            # Extract the requested lines (convert to 0-indexed)
+            selected_lines = lines[start_line - 1:end_line]
+            
+            # Format with line numbers
+            result_lines = []
+            for i, line in enumerate(selected_lines, start=start_line):
+                # Remove trailing newline and format
+                line_content = line.rstrip('\n')
+                result_lines.append(f"{i:4d} | {line_content}")
+            
+            return '\n'.join(result_lines)
+            
+        except UnicodeDecodeError:
+            return f"[Error: Binary file cannot be displayed: {file_path}]"
+        except Exception as e:
+            return f"[Error reading file: {str(e)}]"
+
+    def post_process_code_references(self, response: str, root_dir: str) -> str:
+        """Replace <code> reference blocks with actual file content and line numbers."""
+        
+        # Pattern to match code reference blocks
+        pattern = r'<code>\s*<path>([^<]+)</path>\s*<lines>(\d+),(\d+)</lines>\s*</code>'
+        
+        def replace_code_block(match):
+            file_path = match.group(1).strip()
+            start_line = int(match.group(2))
+            end_line = int(match.group(3))
+            
+            # Get file extension for syntax highlighting
+            lang = self.get_file_extension(file_path)
+            
+            # Extract the code with line numbers
+            code_content = self.extract_lines(root_dir, file_path, start_line, end_line)
+            
+            # Format as markdown code block with file info header
+            return f"`{file_path}` (lines {start_line}-{end_line})\n```{lang}\n{code_content}\n```"
+        
+        # Replace all code reference blocks
+        processed = re.sub(pattern, replace_code_block, response, flags=re.DOTALL)
+        
+        return processed
 
     def get_file_content(self, root_dir: str, rel_path: str, max_lines: int = 5000, add_line_nums: bool = True) -> str:
         """Read file content with optional line numbers."""
@@ -209,5 +300,9 @@ class ContextEngine:
         
         initial_result = response.choices[0].message.content or "No response generated."
         
+        # Post-process to replace code references with actual code
+        logger.info("Post-processing code references...")
+        final_result = self.post_process_code_references(initial_result, root_dir)
+        
         logger.info(f"=== Context retrieval complete ===")
-        return initial_result
+        return final_result

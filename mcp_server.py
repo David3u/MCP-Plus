@@ -50,7 +50,7 @@ def context_engine(question: str, path: str = ".", use_refiner: bool = True) -> 
         path: Path to the codebase (defaults to current directory)
     
     Returns:
-        Comprehensive markdown-formatted analysis with file tree, code snippets, and explanations
+        Comprehensive markdown-formatted analysis with code snippets (automatically injected with line numbers)
     """
     agent = ContextEngine()
     abs_path = os.path.abspath(path)
