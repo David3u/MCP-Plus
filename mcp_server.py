@@ -27,12 +27,13 @@ todo_manager = TodoManager(todos_dir=todos_dir)
 @mcp.tool()
 def context_engine(question: str, path: str = ".") -> str:
     """
-    The **best** tool for getting comprehensive codebase context.
+    The **best** tool for getting comprehensive codebase context and searching for specific files, code, or anything else in the codebase.
 
     **Core Principles:**
     - Ask focused questions for best results
-    - Use for understanding, not for making changes (use subagent for modifications)
+    - Use for understanding, not for making changes
     - Trust the analysis 
+    - Use over specific search tools if you do not know exact location or names of files.
     
     **When to Use:**
     - When starting out with a new codebase
@@ -40,6 +41,7 @@ def context_engine(question: str, path: str = ".") -> str:
     - Finding where specific functionality is implemented
     - Architectural questions spanning multiple modules
     - Debugging by tracing code flow
+    - When looking for a specific thing in the codebase without know the exact location of the file
     
     Examples:
         context_engine(question="How does user authentication work?", path="/project")
@@ -230,59 +232,84 @@ def subagent(task: str, context_path: str = ".") -> str:
 @mcp.tool()
 def todo(project_path: str, tasks: str = "", remove: str = "") -> str:
     """
-    Manage project tasks with hierarchical IDs and automatic sorting.
+    Use this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
+It also helps the user understand the progress of the task and overall progress of their requests.
+
+## When to Use This Tool
+Use this tool proactively in these scenarios:
+
+1. Complex multistep tasks - When a task requires 3 or more distinct steps or actions
+2. Non-trivial and complex tasks - Tasks that require careful planning or multiple operations
+3. User explicitly requests todo list - When the user directly asks you to use the todo list
+4. User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
+5. After receiving new instructions - Immediately capture user requirements as todos. Feel free to edit the todo list based on new information.
+6. After completing a task - Mark it complete and add any new follow-up tasks
+7. When you start working on a new task, mark the todo as in_progress. Ideally you should only have one todo as in_progress at a time. Complete existing tasks before starting new ones.
+
+## When NOT to Use This Tool
+
+Skip using this tool when:
+1. There is only a single, straightforward task
+2. The task is trivial and tracking it provides no organizational benefit
+3. The task can be completed in less than 3 trivial steps
+4. The task is purely conversational or informational
+
+NOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.
+
+
+**Format:** `[id][status] task_content`
+
+**IDs:** Use decimals for subtasks: 1, 2, 2.1, 2.1.1, 3
+- Break complex tasks into subtasks (e.g., 2 → 2.1, 2.2)
+
+**Status Markers:**
+- `[ ]` pending (new task)
+- `[~]` in progress (actively working)
+- `[x]` completed (done)
+
+**Behavior:**
+- New ID → adds task
+- Existing ID → updates status
+- Tasks are auto-sorted by ID
+- Returns full task list after every update
+
+**Examples:**
+    # Add tasks
+    todo(project_path="/project", tasks=\"\"\"
+    [1][ ] Set up project structure
+    [2][ ] Implement authentication
+    [3][ ] Write tests
+    \"\"\")
     
-    **Format:** `[id][status] task_content`
+    # Update status and add subtasks
+    todo(project_path="/project", tasks=\"\"\"
+    [1][x] Set up project structure
+    [2][~] Implement authentication
+    [2.1][ ] Create login endpoint
+    [2.2][ ] Add JWT tokens
+    \"\"\")
     
-    **IDs:** Use decimals for subtasks: 1, 2, 2.1, 2.1.1, 3
-    - Break complex tasks into subtasks (e.g., 2 → 2.1, 2.2)
+    # Remove tasks
+    todo(project_path="/project", remove="2.1, 2.2")
     
-    **Status Markers:**
-    - `[ ]` pending (new task)
-    - `[~]` in progress (actively working)
-    - `[x]` completed (done)
-    
-    **Behavior:**
-    - New ID → adds task
-    - Existing ID → updates status
-    - Tasks are auto-sorted by ID
-    - Returns full task list after every update
-    
-    **Examples:**
-        # Add tasks
-        todo(project_path="/project", tasks=\"\"\"
-        [1][ ] Set up project structure
-        [2][ ] Implement authentication
-        [3][ ] Write tests
-        \"\"\")
-        
-        # Update status and add subtasks
-        todo(project_path="/project", tasks=\"\"\"
-        [1][x] Set up project structure
-        [2][~] Implement authentication
-        [2.1][ ] Create login endpoint
-        [2.2][ ] Add JWT tokens
-        \"\"\")
-        
-        # Remove tasks
-        todo(project_path="/project", remove="2.1, 2.2")
-        
-        # View current tasks (no arguments)
-        todo(project_path="/project")
-    
-    **Best Practices:**
-    - Only mark completed when fully done
-    - Use subtasks when a task becomes complex
-    - Keep task descriptions concise but clear
-    - Mark as in_progress [~] when actively working
-    
-    Args:
-        project_path: Absolute path to the project directory
-        tasks: Task lines in format [id][status] content (one per line)
-        remove: Comma-separated IDs to remove (e.g., "2.1, 2.2, 3")
-    
-    Returns:
-        Full task list (always returned after any operation)
+    # View current tasks (no arguments)
+    todo(project_path="/project")
+
+**Best Practices:**
+- Only mark completed when fully done
+- Use subtasks when a task becomes complex
+- Keep task descriptions concise but clear
+- Mark as in_progress [~] when actively working
+
+Never show todo's in the raw `[id][status] task_content` format to the user. Use proper markdown formatting instead.
+
+Args:
+    project_path: Absolute path to the project directory
+    tasks: Task lines in format [id][status] content (one per line)
+    remove: Comma-separated IDs to remove (e.g., "2.1, 2.2, 3")
+
+Returns:
+    Full task list (always returned after any operation)
     """
     abs_path = os.path.abspath(project_path)
     if not os.path.exists(abs_path):

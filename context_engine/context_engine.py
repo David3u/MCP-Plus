@@ -2,13 +2,14 @@ import os
 import re
 import pathspec
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict
 from openai import OpenAI
 from dotenv import load_dotenv
 from .prompts import (
     CONTEXT_ENGINE_SYSTEM_PROMPT, 
     FILE_SELECTION_PROMPT,
-    COMPREHENSIVE_ANALYSIS_PROMPT
+    COMPREHENSIVE_ANALYSIS_PROMPT,
+    SEARCH_QUERY_PROMPT
 )
 
 load_dotenv()
@@ -97,95 +98,7 @@ class ContextEngine:
         
         return '\n'.join(result)
 
-    def get_file_extension(self, file_path: str) -> str:
-        """Get the file extension for syntax highlighting."""
-        ext_map = {
-            '.py': 'python',
-            '.js': 'javascript',
-            '.ts': 'typescript',
-            '.tsx': 'tsx',
-            '.jsx': 'jsx',
-            '.json': 'json',
-            '.md': 'markdown',
-            '.html': 'html',
-            '.css': 'css',
-            '.scss': 'scss',
-            '.yaml': 'yaml',
-            '.yml': 'yaml',
-            '.sh': 'bash',
-            '.sql': 'sql',
-            '.go': 'go',
-            '.rs': 'rust',
-            '.java': 'java',
-            '.rb': 'ruby',
-            '.php': 'php',
-            '.c': 'c',
-            '.cpp': 'cpp',
-            '.h': 'c',
-        }
-        _, ext = os.path.splitext(file_path)
-        return ext_map.get(ext.lower(), '')
 
-    def extract_lines(self, root_dir: str, file_path: str, start_line: int, end_line: int) -> str:
-        """Extract specific lines from a file with line numbers."""
-        try:
-            full_path = os.path.join(root_dir, file_path)
-            if not os.path.exists(full_path):
-                return f"[Error: File not found: {file_path}]"
-            
-            with open(full_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            
-            total_lines = len(lines)
-            
-            # Clamp line numbers to valid range
-            start_line = max(1, start_line)
-            end_line = min(total_lines, end_line)
-            
-            if start_line > total_lines:
-                return f"[Error: Start line {start_line} exceeds file length ({total_lines} lines)]"
-            
-            # Extract the requested lines (convert to 0-indexed)
-            selected_lines = lines[start_line - 1:end_line]
-            
-            # Format with line numbers
-            result_lines = []
-            for i, line in enumerate(selected_lines, start=start_line):
-                # Remove trailing newline and format
-                line_content = line.rstrip('\n')
-                result_lines.append(f"{i:4d} | {line_content}")
-            
-            return '\n'.join(result_lines)
-            
-        except UnicodeDecodeError:
-            return f"[Error: Binary file cannot be displayed: {file_path}]"
-        except Exception as e:
-            return f"[Error reading file: {str(e)}]"
-
-    def post_process_code_references(self, response: str, root_dir: str) -> str:
-        """Replace <code> reference blocks with actual file content and line numbers."""
-        
-        # Pattern to match code reference blocks
-        pattern = r'<code>\s*<path>([^<]+)</path>\s*<lines>(\d+),(\d+)</lines>\s*</code>'
-        
-        def replace_code_block(match):
-            file_path = match.group(1).strip()
-            start_line = int(match.group(2))
-            end_line = int(match.group(3))
-            
-            # Get file extension for syntax highlighting
-            lang = self.get_file_extension(file_path)
-            
-            # Extract the code with line numbers
-            code_content = self.extract_lines(root_dir, file_path, start_line, end_line)
-            
-            # Format as markdown code block with file info header
-            return f"`{file_path}` (lines {start_line}-{end_line})\n```{lang}\n{code_content}\n```"
-        
-        # Replace all code reference blocks
-        processed = re.sub(pattern, replace_code_block, response, flags=re.DOTALL)
-        
-        return processed
 
     def get_file_content(self, root_dir: str, rel_path: str, max_lines: int = 5000, add_line_nums: bool = True) -> str:
         """Read file content with optional line numbers."""
@@ -213,11 +126,11 @@ class ContextEngine:
             logger.error(f"Error reading {rel_path}: {e}")
             return f"[Error reading file: {str(e)}]"
 
-    def select_relevant_files(self, question: str, all_files: List[str], max_files: int = 50) -> List[str]:
+    def select_relevant_files(self, question: str, file_list_for_prompt: List[str], validation_file_list: List[str], max_files: int = 50) -> List[str]:
         """Use LLM to intelligently select the most relevant files."""
-        logger.info(f"Using LLM to select top {max_files} relevant files from {len(all_files)} total files...")
+        logger.info(f"Using LLM to select top {max_files} relevant files from {len(validation_file_list)} total files...")
         
-        file_list_str = "\n".join(all_files)
+        file_list_str = "\n".join(file_list_for_prompt)
         prompt = FILE_SELECTION_PROMPT.format(
             question=question,
             file_list=file_list_str
@@ -241,14 +154,91 @@ class ContextEngine:
             line = line.lstrip('*- 0123456789.').strip()
             line = line.strip('`')
             
+            # Extract path if they included the match counts (though told not to)
+            if ' [' in line:
+                line = line.split(' [')[0]
+            
             # Only include if it's a valid file from our list
-            if line and line in all_files:
+            if line and line in validation_file_list:
                 selected_files.append(line)
                 if len(selected_files) >= max_files:
                     break
         
         logger.info(f"Selected {len(selected_files)} files for analysis")
         return selected_files
+
+    def generate_search_queries(self, question: str) -> List[str]:
+        """Generate search queries to help identify relevant files."""
+        logger.info("Generating search queries...")
+        prompt = SEARCH_QUERY_PROMPT.format(question=question)
+        
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        queries = []
+        response_text = response.choices[0].message.content or ""
+        for line in response_text.split('\n'):
+            line = line.strip().lstrip('*- ').strip()
+            if line and line.lower() != "(none)":
+                queries.append(line)
+        
+        logger.info(f"Generated {len(queries)} search queries: {queries}")
+        return queries[:10]
+
+    def get_search_match_counts(self, root_dir: str, all_files: List[str], queries: List[str]) -> Dict[str, Dict[str, int]]:
+        """Count matching lines for each query in each file (grep-like with regex support)."""
+        if not queries:
+            return {}
+            
+        logger.info(f"Searching {len(all_files)} files for {len(queries)} queries...")
+        results = {}
+        
+        # Pre-compile patterns for better performance
+        # Detect regex patterns by looking for special characters
+        regex_chars = set('.*+?[]{}()^$|\\')
+        patterns = []
+        
+        for q in queries:
+            has_regex = any(c in regex_chars for c in q)
+            
+            if has_regex:
+                # Try to compile as regex
+                try:
+                    patterns.append((q, re.compile(q, re.IGNORECASE)))
+                    logger.debug(f"Query '{q}' compiled as regex")
+                except re.error as e:
+                    # Invalid regex, fall back to literal match
+                    logger.debug(f"Query '{q}' is not valid regex ({e}), using literal match")
+                    patterns.append((q, re.compile(re.escape(q), re.IGNORECASE)))
+            else:
+                # Simple word - use word boundaries
+                patterns.append((q, re.compile(rf'\b{re.escape(q)}\b', re.IGNORECASE)))
+        
+        for rel_path in all_files:
+            try:
+                full_path = os.path.join(root_dir, rel_path)
+                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+                    
+                file_matches = {}
+                
+                for query_name, pattern in patterns:
+                    count = sum(1 for line in lines if pattern.search(line))
+                    if count > 0:
+                        file_matches[query_name] = count
+                
+                if file_matches:
+                    results[rel_path] = file_matches
+            except Exception as e:
+                logger.debug(f"Could not search {rel_path}: {e}")
+                
+        logger.info(f"Found matches in {len(results)} files")
+        return results
 
     def get_codebase_context(self, question: str, root_dir: str) -> str:
         """
@@ -269,10 +259,23 @@ class ContextEngine:
         all_files = self.scan_files(root_dir)
         file_list_str = "\n".join(all_files)
         
-        # 2. Use LLM to select most relevant files
-        selected_files = self.select_relevant_files(question, all_files, max_files=50)
+        # 2. Generate search queries and get match counts
+        queries = self.generate_search_queries(question)
+        match_counts = self.get_search_match_counts(root_dir, all_files, queries)
         
-        # 3. Read selected file contents with line numbers
+        # 3. Augment file list for selection
+        augmented_file_list = []
+        for f in all_files:
+            if f in match_counts:
+                counts_str = ", ".join([f"{q}: {c}" for q, c in match_counts[f].items()])
+                augmented_file_list.append(f"{f} [{counts_str}]")
+            else:
+                augmented_file_list.append(f)
+        
+        # 4. Use LLM to select most relevant files
+        selected_files = self.select_relevant_files(question, augmented_file_list, all_files, max_files=50)
+        
+        # 5. Read selected file contents with line numbers
         logger.info(f"Reading content from {len(selected_files)} selected files...")
         file_contents_parts = []
         for file_path in selected_files:
@@ -281,28 +284,24 @@ class ContextEngine:
         
         file_contents_str = "\n".join(file_contents_parts)
         
-        # 4. Build comprehensive prompt
+        # 6. Build comprehensive prompt
         prompt = COMPREHENSIVE_ANALYSIS_PROMPT.format(
             question=question,
             file_list=file_list_str,
             file_contents=file_contents_str
         )
         
-        # 5. Single LLM call for comprehensive analysis
+        # 7. Single LLM call for comprehensive analysis
         logger.info("Calling LLM for comprehensive analysis...")
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": prompt}
-            ]
+            ],
         )
         
-        initial_result = response.choices[0].message.content or "No response generated."
+        result = response.choices[0].message.content or "No response generated."
         
-        # Post-process to replace code references with actual code
-        logger.info("Post-processing code references...")
-        final_result = self.post_process_code_references(initial_result, root_dir)
-        
-        logger.info(f"=== Context retrieval complete ===")
-        return final_result
+        logger.info("=== Context retrieval complete ===")
+        return result
